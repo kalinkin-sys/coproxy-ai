@@ -20,7 +20,7 @@ Works with: GPT-4o, GPT-4o-mini, GPT-4.1, o3-mini, and any model available on yo
 ## Quick start
 
 ```bash
-git clone https://github.com/youruser/coproxy-ai.git
+git clone https://github.com/kalinkin-sys/coproxy-ai.git
 cd coproxy-ai
 ./setup.sh
 ```
