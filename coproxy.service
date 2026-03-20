@@ -1,0 +1,23 @@
+[Unit]
+Description=coproxy-ai — Local OAuth Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=kalinkin
+WorkingDirectory=/home/kalinkin/coproxy-ai
+ExecStart=/home/kalinkin/coproxy-ai/.venv/bin/coproxy
+Restart=on-failure
+RestartSec=5
+
+# Secrets via env file (not in config)
+EnvironmentFile=/home/kalinkin/.coproxy.env
+
+# Process isolation
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/kalinkin/.codex
+
+[Install]
+WantedBy=multi-user.target

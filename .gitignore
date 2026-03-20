@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+.env
+auth.json
+.coproxy-salt
+*.tmp
+*.pem
+*.sock
+dist/
+build/
