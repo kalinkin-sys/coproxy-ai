@@ -10,3 +10,4 @@ auth.json
 *.sock
 dist/
 build/
+docs/notebooklm-source.md
