@@ -29,54 +29,64 @@ tpm: TPMDispatcher | None = None
 async def _auto_detect_tpm(client: httpx.AsyncClient, token: str) -> int | None:
     """Detect actual TPM limit from OpenAI rate-limit headers.
 
-    OpenAI returns these headers on every response:
+    OpenAI returns per-model rate-limit headers on every response:
       x-ratelimit-limit-tokens     — org TPM limit for this model
       x-ratelimit-remaining-tokens — tokens remaining in current window
 
-    We send one tiny request (gpt-4o-mini, ~20 tokens) and read the headers.
-    This costs almost nothing and gives the exact limit.
+    We probe multiple models and use the MINIMUM detected limit (conservative).
+    Each probe costs ~20 tokens.
     """
-    logger.info("TPM auto-detect: sending probe request...")
     OPENAI_BASE = "https://api.openai.com"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    # Minimal request — costs ~20 tokens
-    body = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "hi"}],
-        "max_tokens": 1,
-    }
+    # Probe models that are commonly used
+    probe_models = ["gpt-4o", "gpt-4o-mini"]
+    limits: dict[str, int] = {}
 
-    try:
-        resp = await client.post(
-            f"{OPENAI_BASE}/v1/chat/completions",
-            json=body,
-            headers=headers,
-            timeout=30.0,
-        )
+    for model in probe_models:
+        body = {
+            "model": model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }
+        try:
+            resp = await client.post(
+                f"{OPENAI_BASE}/v1/chat/completions",
+                json=body,
+                headers=headers,
+                timeout=30.0,
+            )
 
-        # Read rate-limit headers (works on both 200 and 429)
-        limit_tokens = resp.headers.get("x-ratelimit-limit-tokens")
-        remaining = resp.headers.get("x-ratelimit-remaining-tokens")
-        limit_requests = resp.headers.get("x-ratelimit-limit-requests")
+            limit_tokens = resp.headers.get("x-ratelimit-limit-tokens")
+            remaining = resp.headers.get("x-ratelimit-remaining-tokens")
+            limit_requests = resp.headers.get("x-ratelimit-limit-requests")
 
-        logger.info(
-            "TPM auto-detect: status=%d, x-ratelimit-limit-tokens=%s, "
-            "remaining=%s, limit-requests=%s",
-            resp.status_code, limit_tokens, remaining, limit_requests,
-        )
+            logger.info(
+                "TPM auto-detect [%s]: status=%d, limit-tokens=%s, "
+                "remaining=%s, limit-requests=%s",
+                model, resp.status_code, limit_tokens, remaining, limit_requests,
+            )
 
-        if limit_tokens:
-            detected = int(limit_tokens)
-            logger.info("TPM auto-detect: detected limit = %d tokens/min", detected)
-            return detected
+            if limit_tokens:
+                limits[model] = int(limit_tokens)
 
-        logger.warning("TPM auto-detect: no rate-limit headers in response")
+        except Exception as e:
+            logger.warning("TPM auto-detect [%s]: probe failed: %s", model, e)
+
+    if not limits:
+        logger.warning("TPM auto-detect: no rate-limit headers from any model")
         return None
 
-    except Exception as e:
-        logger.warning("TPM auto-detect: probe failed: %s", e)
-        return None
+    # Use minimum across models (most restrictive)
+    min_model = min(limits, key=limits.get)  # type: ignore[arg-type]
+    min_limit = limits[min_model]
+    logger.info(
+        "TPM auto-detect results: %s — using min=%d (%s)",
+        ", ".join(f"{m}={v}" for m, v in sorted(limits.items())),
+        min_limit,
+        min_model,
+    )
+    return min_limit
 
 
 @asynccontextmanager
