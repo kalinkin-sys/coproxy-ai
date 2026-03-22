@@ -106,7 +106,11 @@ All config is via environment variables (in `.env` file):
 | `COPROXY_RATE_LIMIT` | `30` | Max requests/minute (0 = unlimited) |
 | `COPROXY_LOG_LEVEL` | `info` | Logging level |
 | `COPROXY_LOG_REQUESTS` | `false` | Log each proxied request |
-| `COPROXY_TPM_LIMIT` | `0` | Token-per-minute budget (0 = unlimited). Enables priority queue |
+| `COPROXY_LOG_EXCHANGES` | `false` | Save full request+response bodies to disk (**debug only!**) |
+| `COPROXY_TPM_LIMIT` | `30000` | Token-per-minute budget (0 = unlimited). Enables priority queue |
+| `COPROXY_TPM_AGGRESSIVE` | `false` | Try direct send to OpenAI, fall back to queue on 429 |
+| `COPROXY_TPM_AUTO_DETECT` | `false` | Probe actual org TPM limit from OpenAI headers at startup |
+| `COPROXY_TPM_TIMEOUT` | `120` | Max seconds to wait for TPM budget |
 | `COPROXY_TLS` | `false` | Enable HTTPS with auto-generated self-signed cert |
 | `COPROXY_TLS_CERT_DIR` | `~/.coproxy/tls` | Directory for TLS certificate and key |
 | `COPROXY_UNIX_SOCKET` | *(disabled)* | Unix socket path (overrides host:port, chmod 600) |
@@ -128,6 +132,24 @@ When `COPROXY_TPM_LIMIT` is set, coproxy enforces a sliding 60-second token budg
 - Requests are queued when the TPM window is full
 - **Greedy best-fit dispatch**: highest-priority requests get budget first
 - Token estimation: `len(prompt)/3 + 500 + max_tokens` → settled to actual after OpenAI responds
+
+### Aggressive mode
+
+With `COPROXY_TPM_AGGRESSIVE=true`, coproxy tries to send each request directly to OpenAI **without waiting in the queue**. If OpenAI returns 429 (rate limited), the request falls back to the normal priority queue. This reduces latency when TPM budget is available.
+
+### Auto-detect TPM limit
+
+With `COPROXY_TPM_AUTO_DETECT=true`, coproxy sends a single tiny probe request (~20 tokens) at startup and reads the actual org TPM limit from OpenAI's `x-ratelimit-limit-tokens` response header. The detected value overrides `COPROXY_TPM_LIMIT`.
+
+### Exchange logging (debug)
+
+With `COPROXY_LOG_EXCHANGES=true`, coproxy saves full request and response bodies to `~/.coproxy-logs/exchanges/`. Each exchange produces three files:
+
+- `*_req.json` — full request (messages, tools, model)
+- `*_resp.json` — full response (content, tool_calls, usage). Streaming responses are reassembled.
+- `*_meta.txt` — one-line summary (elapsed, tokens, response preview)
+
+**Warning:** This logs all prompt content to disk. Use only for debugging, never in production. Prominent warnings are emitted at startup, periodically in logs, and in a `WARNING_NOT_FOR_PRODUCTION.txt` file in the log directory.
 
 ### `/v1/stats` response
 
@@ -206,8 +228,9 @@ coproxy is designed to run on your own server with no secrets leaving localhost.
 
 **Logging policy**
 - Logged: HTTP method, path, model, status code, latency
-- Never logged: prompts, responses, access/refresh/API tokens (not even partially), proxy secret, account IDs
+- Never logged (by default): prompts, responses, access/refresh/API tokens (not even partially), proxy secret, account IDs
 - Error responses are sanitized — no token fragments in exceptions
+- **Exchange logging** (`COPROXY_LOG_EXCHANGES`): opt-in debug mode that saves full request/response bodies. Emits prominent security warnings at startup, periodically in logs, and in a `WARNING_NOT_FOR_PRODUCTION.txt` file. Auto-cleans to last 200 exchanges.
 
 **Other**
 - `--dry-run` flag to validate config and auth without starting the server

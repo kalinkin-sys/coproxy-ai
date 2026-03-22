@@ -26,10 +26,80 @@ cfg: Config = None  # type: ignore[assignment]
 tpm: TPMDispatcher | None = None
 
 
+async def _auto_detect_tpm(client: httpx.AsyncClient, token: str) -> int | None:
+    """Detect actual TPM limit from OpenAI rate-limit headers.
+
+    OpenAI returns these headers on every response:
+      x-ratelimit-limit-tokens     — org TPM limit for this model
+      x-ratelimit-remaining-tokens — tokens remaining in current window
+
+    We send one tiny request (gpt-4o-mini, ~20 tokens) and read the headers.
+    This costs almost nothing and gives the exact limit.
+    """
+    logger.info("TPM auto-detect: sending probe request...")
+    OPENAI_BASE = "https://api.openai.com"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Minimal request — costs ~20 tokens
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    }
+
+    try:
+        resp = await client.post(
+            f"{OPENAI_BASE}/v1/chat/completions",
+            json=body,
+            headers=headers,
+            timeout=30.0,
+        )
+
+        # Read rate-limit headers (works on both 200 and 429)
+        limit_tokens = resp.headers.get("x-ratelimit-limit-tokens")
+        remaining = resp.headers.get("x-ratelimit-remaining-tokens")
+        limit_requests = resp.headers.get("x-ratelimit-limit-requests")
+
+        logger.info(
+            "TPM auto-detect: status=%d, x-ratelimit-limit-tokens=%s, "
+            "remaining=%s, limit-requests=%s",
+            resp.status_code, limit_tokens, remaining, limit_requests,
+        )
+
+        if limit_tokens:
+            detected = int(limit_tokens)
+            logger.info("TPM auto-detect: detected limit = %d tokens/min", detected)
+            return detected
+
+        logger.warning("TPM auto-detect: no rate-limit headers in response")
+        return None
+
+    except Exception as e:
+        logger.warning("TPM auto-detect: probe failed: %s", e)
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=120.0)
     logger.info("HTTP client pool created")
+
+    # Initialize exchange logging
+    from coproxy.proxy.handler import _init_exchange_logging
+    _init_exchange_logging()
+
+    # Auto-detect TPM limit if configured
+    if cfg.tpm_auto_detect and tpm is not None:
+        try:
+            from coproxy.auth import store as auth_store
+            token = await auth_store.get_valid_token(cfg)
+            detected = await _auto_detect_tpm(app.state.http_client, token)
+            if detected is not None and detected != tpm.limit:
+                old = tpm.limit
+                tpm.limit = detected
+                logger.info("TPM limit updated: %d → %d (auto-detected)", old, detected)
+        except Exception as e:
+            logger.warning("TPM auto-detect failed: %s — keeping configured limit", e)
 
     yield
     await app.state.http_client.aclose()
@@ -46,7 +116,6 @@ app = FastAPI(
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # /health returns only status (no sensitive data), skip auth
         if request.url.path == "/health":
             return await call_next(request)
 
@@ -58,7 +127,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# 10 MB — allows multimodal requests with base64-encoded images, prevents OOM
 MAX_BODY_SIZE = 10 * 1024 * 1024
 
 
@@ -99,12 +167,21 @@ def configure(config: Config) -> None:
     """Set config and add middleware. Must be called before app starts."""
     global cfg, tpm
     cfg = config
+
     if config.tpm_limit > 0:
         tpm = TPMDispatcher(limit=config.tpm_limit, timeout=config.tpm_timeout)
-        logger.info("TPM dispatcher enabled: %d tokens/min, %ds timeout",
-                     config.tpm_limit, config.tpm_timeout)
-    # Order matters: outermost middleware runs first
-    # body size → rate limit → auth → handler
+        logger.info("TPM dispatcher enabled: %d tokens/min, %ds timeout", config.tpm_limit, config.tpm_timeout)
+        if config.tpm_aggressive:
+            logger.info("TPM aggressive mode: ON — will try direct send before queuing")
+        if config.tpm_auto_detect:
+            logger.info("TPM auto-detect: ON — will probe actual limit at startup")
+
+    if config.log_exchanges:
+        logger.warning(
+            "⚠️  EXCHANGE LOGGING ENABLED — full request/response bodies will be saved. "
+            "NOT SAFE for production!"
+        )
+
     app.add_middleware(AuthMiddleware)
     if config.rate_limit > 0:
         app.add_middleware(RateLimitMiddleware, max_per_minute=config.rate_limit)

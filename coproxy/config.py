@@ -18,9 +18,12 @@ class Config:
     refresh_before_seconds: int = 300
     log_level: str = "info"
     log_requests: bool = False
+    log_exchanges: bool = False  # full request+response logging (DEBUG ONLY)
     rate_limit: int = 30  # requests per minute, 0 = unlimited
     tpm_limit: int = 30_000  # tokens per minute, 0 = disabled
     tpm_timeout: int = 120  # max seconds to wait for TPM budget
+    tpm_auto_detect: bool = False  # probe actual TPM limit at startup
+    tpm_aggressive: bool = False  # try sending immediately, queue on 429
     tls: bool = False  # enable HTTPS with self-signed cert
     tls_cert_dir: str = "~/.coproxy/tls"
     unix_socket: str = ""  # path to Unix socket (overrides host:port)
@@ -47,9 +50,24 @@ def load(yaml_path: str | None = None) -> Config:
         "1",
         "yes",
     )
+    cfg.log_exchanges = os.environ.get("COPROXY_LOG_EXCHANGES", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     cfg.rate_limit = int(os.environ.get("COPROXY_RATE_LIMIT", str(cfg.rate_limit)))
     cfg.tpm_limit = int(os.environ.get("COPROXY_TPM_LIMIT", str(cfg.tpm_limit)))
     cfg.tpm_timeout = int(os.environ.get("COPROXY_TPM_TIMEOUT", str(cfg.tpm_timeout)))
+    cfg.tpm_auto_detect = os.environ.get("COPROXY_TPM_AUTO_DETECT", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    cfg.tpm_aggressive = os.environ.get("COPROXY_TPM_AGGRESSIVE", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
     cfg.tls = os.environ.get("COPROXY_TLS", "").lower() in ("true", "1", "yes")
     cfg.tls_cert_dir = os.environ.get("COPROXY_TLS_CERT_DIR", cfg.tls_cert_dir)
     cfg.unix_socket = os.environ.get("COPROXY_UNIX_SOCKET", cfg.unix_socket)
