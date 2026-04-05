@@ -40,7 +40,7 @@ echo
 if [ -f "$AUTH_FILE" ]; then
     echo "→ Auth file found: $AUTH_FILE"
     read -rp "  Re-login? [y/N] " re
-    if [[ "${re,,}" == "y" ]]; then
+    if [[ "$(echo "$re" | tr A-Z a-z)" == "y" ]]; then
         "$VENV/bin/coproxy-login" --auth-file "$AUTH_FILE"
     fi
 else
@@ -62,13 +62,13 @@ else
     echo "→ Security options (recommended for shared hosting):"
     echo
     read -rp "  Enable Unix socket? (only you can access the proxy) [y/N] " uds_choice
-    if [[ "${uds_choice,,}" == "y" ]]; then
+    if [[ "$(echo "$uds_choice" | tr A-Z a-z)" == "y" ]]; then
         ENABLE_UDS="$HOME/.coproxy/coproxy.sock"
         mkdir -p "$(dirname "$ENABLE_UDS")"
     fi
 
     read -rp "  Enable TLS/HTTPS? (encrypts loopback traffic) [y/N] " tls_choice
-    if [[ "${tls_choice,,}" == "y" ]]; then
+    if [[ "$(echo "$tls_choice" | tr A-Z a-z)" == "y" ]]; then
         ENABLE_TLS="true"
     fi
 
@@ -102,7 +102,7 @@ echo
 
 # ─── Step 5: Systemd (optional) ─────────────────────────────────────
 read -rp "→ Install systemd service? [y/N] " install_svc
-if [[ "${install_svc,,}" == "y" ]]; then
+if [[ "$(echo "$install_svc" | tr A-Z a-z)" == "y" ]]; then
     SERVICE_FILE="/etc/systemd/system/coproxy.service"
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
